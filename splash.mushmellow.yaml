@@ -1,0 +1,33 @@
+version: 1
+name: splash
+
+mushmellows:
+  build:
+    description: Build the splash binary
+    puffs:
+      - id: build
+        run: "go build -o bin/splash ./"
+
+  tidy:
+    description: Tidy go modules
+    puffs:
+      - id: tidy
+        run: "go mod tidy"
+
+  inspect:
+    description: Inspect the example workflow
+    puffs:
+      - id: inspect
+        run: "go run ./ inspect examples/fix-tests.lua"
+
+  run-example:
+    description: Run the fix-tests example workflow
+    puffs:
+      - id: run
+        run: "go run ./ run examples/fix-tests.lua"
+
+  clean:
+    description: Remove build artifacts
+    puffs:
+      - id: clean
+        run: "rm -rf bin/"
