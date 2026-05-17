@@ -21,7 +21,7 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X main.version={{.Version}}
+      - -X github.com/dominionthedev/splash/cmd.Version={{.Version}}
 
 archives:
   - id: splash
