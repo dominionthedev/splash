@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/charmbracelet/log"
 	"github.com/dominionthedev/splash/internal/capability"
@@ -11,6 +12,7 @@ import (
 	"github.com/dominionthedev/splash/internal/model"
 	"github.com/dominionthedev/splash/internal/orchestrator"
 	"github.com/dominionthedev/splash/internal/storage"
+	"github.com/dominionthedev/splash/internal/workflow"
 	"github.com/spf13/cobra"
 )
 
@@ -29,10 +31,10 @@ var runCmd = &cobra.Command{
 			targetName = args[1]
 		}
 
-		// ── Load DSL ────────────────────────────────────────────────────
+		// ── Load DSL ─────────────────────────────────────────────────────
 		result, err := dsl.Load(filePath)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to load %s:\n  %w", filePath, err)
 		}
 		if len(result.Workflows) == 0 {
 			return fmt.Errorf("no workflows found in %s", filePath)
@@ -50,11 +52,13 @@ var runCmd = &cobra.Command{
 				}
 			}
 			if !found {
-				return fmt.Errorf("workflow %q not found in %s", targetName, filePath)
+				available := workflowNames(result.Workflows)
+				return fmt.Errorf("workflow %q not found in %s\n  available: %s",
+					targetName, filePath, strings.Join(available, ", "))
 			}
 		}
 
-		// ── Setup runtime ───────────────────────────────────────────────
+		// ── Runtime setup ─────────────────────────────────────────────────
 		workspace := flagWorkspace
 		if workspace == "" {
 			workspace, _ = os.Getwd()
@@ -62,7 +66,7 @@ var runCmd = &cobra.Command{
 
 		store, err := storage.New(workspace)
 		if err != nil {
-			return fmt.Errorf("storage: %w", err)
+			return fmt.Errorf("storage init failed: %w", err)
 		}
 
 		caps := capability.New()
@@ -70,48 +74,69 @@ var runCmd = &cobra.Command{
 		logger := log.New(os.Stderr)
 		orch := orchestrator.New(caps, m, store, logger)
 
-		// ── Execute ─────────────────────────────────────────────────────
+		// ── Execute ───────────────────────────────────────────────────────
+		fmt.Fprintf(os.Stderr, "running workflow: %s (%d steps)\n\n", wf.Name, len(wf.Steps))
 		runResult := orch.Run(context.Background(), wf)
 
-		// Print results.
-		fmt.Println()
+		// ── Print results ─────────────────────────────────────────────────
 		for _, sr := range runResult.Steps {
-			if sr.Error != nil {
-				fmt.Fprintf(os.Stderr, "  ✗ [%s] %v\n", sr.StepName, sr.Error)
-				continue
-			}
-			fmt.Printf("  ✓ [%s]\n", sr.StepName)
-			if sr.Output != "" {
-				indented := "      " + replaceNewlines(sr.Output, "\n      ")
-				fmt.Println(indented)
-			}
+			printStepResult(sr)
 		}
 		fmt.Println()
 
 		if runResult.Error != nil {
-			return fmt.Errorf("workflow failed: %w", runResult.Error)
+			fmt.Fprintf(os.Stderr, "workflow failed: %v\n", runResult.Error)
+			os.Exit(1)
 		}
 
 		if len(runResult.Artifacts) > 0 {
-			fmt.Printf("  artifacts saved: %d\n", len(runResult.Artifacts))
+			fmt.Fprintf(os.Stderr, "%d artifact(s) saved to .splash/artifacts/\n", len(runResult.Artifacts))
 		}
 
+		fmt.Fprintf(os.Stderr, "done.\n")
 		return nil
 	},
 }
 
-func init() {
-	rootCmd.AddCommand(runCmd)
-}
+func printStepResult(sr *workflow.StepResult) {
+	if sr.Error != nil {
+		fmt.Printf("  ✗  %s\n", sr.StepName)
+		// Indent each line of the error for readability.
+		for _, line := range strings.Split(sr.Error.Error(), "\n") {
+			if strings.TrimSpace(line) != "" {
+				fmt.Printf("     %s\n", line)
+			}
+		}
+		return
+	}
 
-func replaceNewlines(s, with string) string {
-	out := ""
-	for _, c := range s {
-		if c == '\n' {
-			out += with
-		} else {
-			out += string(c)
+	fmt.Printf("  ✓  %s\n", sr.StepName)
+	if sr.Output != "" {
+		lines := strings.Split(strings.TrimRight(sr.Output, "\n"), "\n")
+		// Cap output preview to 8 lines — full output is in artifacts.
+		preview := lines
+		truncated := false
+		if len(lines) > 8 {
+			preview = lines[:8]
+			truncated = true
+		}
+		for _, line := range preview {
+			fmt.Printf("     %s\n", line)
+		}
+		if truncated {
+			fmt.Printf("     … (%d more lines)\n", len(lines)-8)
 		}
 	}
-	return out
+}
+
+func workflowNames(wfs []*workflow.Workflow) []string {
+	names := make([]string, len(wfs))
+	for i, w := range wfs {
+		names[i] = w.Name
+	}
+	return names
+}
+
+func init() {
+	rootCmd.AddCommand(runCmd)
 }
